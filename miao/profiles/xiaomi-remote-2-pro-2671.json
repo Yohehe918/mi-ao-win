@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "xiaomi-remote-2-pro-2671",
+  "displayName": "小米蓝牙遥控器 2 Pro",
+  "firmware": "2671",
+  "vendorID": 10007,
+  "productID": 12984,
+  "productName": "小米蓝牙语音遥控器",
+  "transport": "Bluetooth Low Energy",
+  "buttons": [
+    { "button": "dpad_up", "usagePage": 7, "usage": 82, "intercept": true },
+    { "button": "dpad_down", "usagePage": 7, "usage": 81, "intercept": true },
+    { "button": "dpad_left", "usagePage": 7, "usage": 80, "intercept": true },
+    { "button": "dpad_right", "usagePage": 7, "usage": 79, "intercept": true },
+    { "button": "center", "usagePage": 7, "usage": 40, "intercept": true },
+    { "button": "back", "usagePage": 7, "usage": 241, "intercept": true },
+    { "button": "home", "usagePage": 7, "usage": 74, "intercept": true },
+    { "button": "tv", "usagePage": 7, "usage": 53, "intercept": true },
+    { "button": "power", "usagePage": 7, "usage": 102, "intercept": true },
+    { "button": "voice", "usagePage": 7, "usage": 62, "intercept": true },
+    { "button": "volume_up", "usagePage": 7, "usage": 128, "intercept": true },
+    { "button": "volume_down", "usagePage": 7, "usage": 129, "intercept": true }
+  ]
+}

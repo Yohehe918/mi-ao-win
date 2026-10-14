@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "miao-win"
+version = "0.2.0"
+description = "米遥 Windows 移植：小米蓝牙遥控器 2 Pro 的 Vibe Coding 语音输入"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = ["bleak>=0.22", "pywin32>=306", "pystray>=0.19", "Pillow>=10", "sounddevice>=0.5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyinstaller>=6.11"]
+
+[tool.setuptools.packages.find]
+include = ["miao*"]
+
+[tool.setuptools.package-data]
+miao = ["profiles/*.json", "resources/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
