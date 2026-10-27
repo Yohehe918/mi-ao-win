@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from uuid import UUID
 from collections.abc import Callable
 
 from bleak import BleakClient, BleakScanner
@@ -30,7 +31,7 @@ NEGOTIATION_TIMEOUT = 1.5
 TICK_INTERVAL = 0.1
 
 
-async def _request_gatt_access(address: str, attempts: int = 3) -> None:
+async def _request_gatt_access(address: str, attempts: int = 3):
     """已配对为 HID 的设备，Windows 会拒绝第三方访问其 GATT 服务。
 
     先用原生 WinRT 打开 ATVV 服务并 request_access_async()，授权在进程内生效，
@@ -45,11 +46,16 @@ async def _request_gatt_access(address: str, attempts: int = 3) -> None:
         from winrt.windows.devices.bluetooth import (
             BluetoothAddressType,
             BluetoothLEDevice,
+            BluetoothCacheMode,
         )
-    except ImportError:  # 非 Windows 依赖缺失时静默跳过
-        return
+        from winrt.windows.devices.enumeration import DeviceAccessStatus
+    except ImportError as error:
+        raise RuntimeError("缺少 Windows 蓝牙运行库，无法初始化语音服务") from error
 
     for attempt in range(1, attempts + 1):
+        device = None
+        services = []
+        retained = False
         try:
             device = (
                 await BluetoothLEDevice.from_bluetooth_address_with_bluetooth_address_type_async(
@@ -60,25 +66,32 @@ async def _request_gatt_access(address: str, attempts: int = 3) -> None:
                 log.debug("GATT 预授权：设备对象为空（第 %d 次）", attempt)
                 continue
             try:
-                result = await device.get_gatt_services_async()
+                result = await asyncio.wait_for(
+                    device.get_gatt_services_for_uuid_with_cache_mode_async(
+                        UUID(SERVICE_UUID), BluetoothCacheMode.UNCACHED
+                    ), timeout=10.0)
+                services = list(result.services)
                 if result.status != 0:  # GattCommunicationStatus.SUCCESS
                     log.debug("GATT 预授权：服务表不可用 status=%s", result.status)
                     continue
-                granted = False
                 for service in result.services:
                     if str(service.uuid).lower() == SERVICE_UUID.lower():
-                        await service.request_access_async()
-                        granted = True
-                    service.close()
-                if granted:
-                    return
+                        access = await asyncio.wait_for(service.request_access_async(), timeout=5.0)
+                        if access == DeviceAccessStatus.ALLOWED:
+                            retained = True
+                            return device, services
+                        log.warning("ATVV 服务访问尚未就绪：%s", access)
                 log.debug("GATT 预授权：未找到 ATVV 服务（第 %d 次）", attempt)
             finally:
-                device.close()
+                if not retained:
+                    for service in services:
+                        service.close()
+                    device.close()
         except Exception as error:  # noqa: BLE001
-            log.debug("GATT 访问预授权失败（第 %d 次）: %s", attempt, error)
+            log.warning("GATT 访问预授权失败（第 %d 次）: %r", attempt, error)
         if attempt < attempts:
             await asyncio.sleep(0.8)
+    raise RuntimeError("遥控器语音服务尚未就绪，请按方向键唤醒；正在自动重试")
 
 
 class BLEVoiceBridge:
@@ -113,7 +126,9 @@ class BLEVoiceBridge:
             except asyncio.CancelledError:
                 raise
             except Exception as error:  # noqa: BLE001
-                log.warning("连接中断：%s", error)
+                log.warning("连接中断：%s: %r", type(error).__name__, error)
+            finally:
+                self._client = None
             self._emit_session_actions(self.session.on_disconnected())
 
             decision = self.reconnect_policy.next_decision()
@@ -145,21 +160,34 @@ class BLEVoiceBridge:
     # ------------------------------------------------------------------
 
     async def _connect_and_serve(self) -> None:
+        lease = None
         if self.selection.preferred_identifier:
             # 已绑定的遥控器不会对第三方应用广播，直接按地址连接。
             # 注意：同进程内先跑 BleakScanner 再直连会导致 WinRT GATT 会话挂死，故跳过扫描。
-            await _request_gatt_access(self.selection.preferred_identifier)
+            lease = await asyncio.wait_for(
+                _request_gatt_access(self.selection.preferred_identifier), timeout=35.0)
             device = BLEDevice(self.selection.preferred_identifier, "绑定设备", None)
             log.info("按绑定地址直连 %s", device.address)
         else:
             device = await self._scan()
             if device is None:
                 return
+        try:
+            await self._serve_device(device)
+        finally:
+            if lease:
+                owner, services = lease
+                for service in services:
+                    service.close()
+                owner.close()
+
+    async def _serve_device(self, device) -> None:
         log.info("连接 %s（%s）", device.name or "未知设备", device.address)
 
         self.session = VoiceSession(frame_sink=self.frame_sink)
         async with BleakClient(
-            device, timeout=15.0, disconnected_callback=lambda _: log.info("设备已断开")
+            device, timeout=15.0, winrt={"use_cached_services": False},
+            disconnected_callback=lambda _: log.info("设备已断开")
         ) as client:
             self._client = client
             loop = asyncio.get_running_loop()
@@ -232,6 +260,8 @@ class BLEVoiceBridge:
             if isinstance(action, SendCommand):
                 asyncio.create_task(self._write(action.data))
             elif isinstance(action, StateChanged):
+                if action.state.name == "READY":
+                    self.reconnect_policy.reset()
                 self.on_state(action)
             elif isinstance(action, AudioCompleted):
                 self.on_audio(action)
